@@ -22,37 +22,37 @@ jobs:
       - name: Generate icon
         run: python create_icon.py
 
-      - name: Download exiftool
+      - name: Install exiftool and ffmpeg via Chocolatey
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://exiftool.org/exiftool-13.55_64.zip" `
-            -OutFile "exiftool.zip" -UseBasicParsing
-          Expand-Archive exiftool.zip -DestinationPath exiftool_tmp -Force
-          $exe = Get-ChildItem -Path exiftool_tmp -Filter "*.exe" -Recurse |
-                 Select-Object -First 1
-          Copy-Item $exe.FullName -Destination "exiftool.exe"
-          Remove-Item exiftool_tmp, exiftool.zip -Recurse -Force
+          choco install exiftool --yes --no-progress
+          choco install ffmpeg --yes --no-progress
 
-      - name: Download ffmpeg
-        shell: pwsh
-        run: |
-          $url = "https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-essentials_build.zip"
-          Invoke-WebRequest -Uri $url -OutFile "ffmpeg.zip" -UseBasicParsing
-          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_tmp -Force
-          $exe = Get-ChildItem -Path ffmpeg_tmp -Filter "ffmpeg.exe" -Recurse |
-                 Select-Object -First 1
-          Copy-Item $exe.FullName -Destination "ffmpeg.exe"
-          Remove-Item ffmpeg_tmp, ffmpeg.zip -Recurse -Force
+          # Locate executables and copy to project root for PyInstaller
+          $et = (Get-Command exiftool -ErrorAction Stop).Source
+          $ff = (Get-Command ffmpeg  -ErrorAction Stop).Source
+          Copy-Item $et -Destination "exiftool.exe"
+          Copy-Item $ff -Destination "ffmpeg.exe"
+          Write-Host "exiftool -> $et"
+          Write-Host "ffmpeg   -> $ff"
 
       - name: Build with PyInstaller
+        # Use Python to invoke PyInstaller so we avoid PowerShell's semicolon
+        # ambiguity inside --add-binary arguments.
         run: |
-          pyinstaller --onedir --windowed --name MetaKill `
-            "--add-binary=exiftool.exe;." `
-            "--add-binary=ffmpeg.exe;." `
-            --icon icon.ico `
-            --clean --noconfirm `
-            metakill.py
-        shell: pwsh
+          python -c "
+          import subprocess, sys
+          subprocess.run([
+              sys.executable, '-m', 'PyInstaller',
+              '--onedir', '--windowed',
+              '--name', 'MetaKill',
+              '--add-binary', 'exiftool.exe;.',
+              '--add-binary', 'ffmpeg.exe;.',
+              '--icon', 'icon.ico',
+              '--clean', '--noconfirm',
+              'metakill.py',
+          ], check=True)
+          "
 
       - name: Install Inno Setup
         shell: pwsh
@@ -61,7 +61,8 @@ jobs:
       - name: Create installer
         shell: pwsh
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" metakill.iss
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc metakill.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Upload installer artifact
@@ -82,13 +83,13 @@ jobs:
 
             Remove ALL identifying metadata from images and videos.
 
-            **Stripped from images:** GPS, device model, serial number, lens, EXIF/IPTC/XMP, timestamps
-            **Stripped from videos:** Container metadata, encoder strings, SEI NAL units (deep mode), chapters, thumbnails
+            **Stripped from images:** GPS, device model, serial number, EXIF/IPTC/XMP, timestamps
+            **Stripped from videos:** Container metadata, encoder strings, SEI NAL units (deep mode re-encode), chapters, thumbnails
 
             ### Install
-            Download `MetaKill_Setup.exe` and run it. No Python required.
+            Download `MetaKill_Setup.exe` → double-click → done. No Python required.
 
-            ### Requirements
+            ### System requirements
             Windows 10/11 x64
           files: dist/MetaKill_Setup.exe
           draft: false
