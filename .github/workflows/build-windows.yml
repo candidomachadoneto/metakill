@@ -1,0 +1,95 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install pyinstaller pillow
+
+      - name: Generate icon
+        run: python create_icon.py
+
+      - name: Download exiftool
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://exiftool.org/exiftool-13.55_64.zip" `
+            -OutFile "exiftool.zip" -UseBasicParsing
+          Expand-Archive exiftool.zip -DestinationPath exiftool_tmp -Force
+          $exe = Get-ChildItem -Path exiftool_tmp -Filter "*.exe" -Recurse |
+                 Select-Object -First 1
+          Copy-Item $exe.FullName -Destination "exiftool.exe"
+          Remove-Item exiftool_tmp, exiftool.zip -Recurse -Force
+
+      - name: Download ffmpeg
+        shell: pwsh
+        run: |
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-essentials_build.zip"
+          Invoke-WebRequest -Uri $url -OutFile "ffmpeg.zip" -UseBasicParsing
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_tmp -Force
+          $exe = Get-ChildItem -Path ffmpeg_tmp -Filter "ffmpeg.exe" -Recurse |
+                 Select-Object -First 1
+          Copy-Item $exe.FullName -Destination "ffmpeg.exe"
+          Remove-Item ffmpeg_tmp, ffmpeg.zip -Recurse -Force
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onedir --windowed --name MetaKill `
+            "--add-binary=exiftool.exe;." `
+            "--add-binary=ffmpeg.exe;." `
+            --icon icon.ico `
+            --clean --noconfirm `
+            metakill.py
+        shell: pwsh
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Create installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" metakill.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MetaKill_Setup
+          path: dist/MetaKill_Setup.exe
+          retention-days: 30
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0
+          name: MetaKill v1.0
+          body: |
+            ## MetaKill v1.0 — Deep Metadata Anonymizer
+
+            Remove ALL identifying metadata from images and videos.
+
+            **Stripped from images:** GPS, device model, serial number, lens, EXIF/IPTC/XMP, timestamps
+            **Stripped from videos:** Container metadata, encoder strings, SEI NAL units (deep mode), chapters, thumbnails
+
+            ### Install
+            Download `MetaKill_Setup.exe` and run it. No Python required.
+
+            ### Requirements
+            Windows 10/11 x64
+          files: dist/MetaKill_Setup.exe
+          draft: false
+          prerelease: false
